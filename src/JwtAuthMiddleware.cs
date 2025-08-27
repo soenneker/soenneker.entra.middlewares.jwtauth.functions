@@ -23,18 +23,21 @@ namespace Soenneker.Entra.Middlewares.JwtAuth.Functions;
 /// <inheritdoc cref="IJwtAuthMiddleware"/>
 public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
 {
-    // Reuse handler to avoid per-request allocs
     private static readonly JwtSecurityTokenHandler _handler = new();
 
-    // Shared config manager and base TVP (immutable parts)
     private static ConfigurationManager<OpenIdConnectConfiguration>? _cfgMgr;
     private static TokenValidationParameters? _baseParams;
 
     private readonly ILogger<JwtAuthMiddleware> _log;
+    private readonly string _expectedAzpOrAppId;
 
     public JwtAuthMiddleware(IConfiguration config, ILogger<JwtAuthMiddleware> log)
     {
         _log = log;
+
+        // Default to the official Entra Extensions caller app id unless overridden:
+        // https://learn.microsoft.com/azure/active-directory/external-identities/custom-authentication-extension-secure-rest-api
+        _expectedAzpOrAppId = config.GetValue<string>("Jwt:ExpectedAzpOrAppId") ?? "99045fe1-7639-4a75-9d4a-577b6ca3810f";
 
         if (_cfgMgr is null || _baseParams is null)
         {
@@ -51,7 +54,6 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
 
             _cfgMgr = new ConfigurationManager<OpenIdConnectConfiguration>(meta, new OpenIdConnectConfigurationRetriever(), retriever);
 
-            // Build once; we only inject keys per request
             _baseParams = new TokenValidationParameters
             {
                 ValidateIssuerSigningKey = true,
@@ -63,7 +65,6 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
                 ClockSkew = skew
             };
 
-            // Make claim types pass through unchanged
             JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
         }
     }
@@ -84,33 +85,19 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             return;
         }
 
-        // JwtSecurityTokenHandler needs a string
-        var jwt = tokenSpan.ToString();
+        string jwt = tokenSpan.ToString();
 
         try
         {
-            // ConfigManager caches and refreshes under the hood; cheap call on steady-state
             OpenIdConnectConfiguration cfg = await _cfgMgr!.GetConfigurationAsync(ctx.CancellationToken).NoSync();
 
-            // Clone the base so we can safely set per-request state without races
             TokenValidationParameters tvp = _baseParams!.Clone();
 
-            // Fast path: if the token has a 'kid', narrow the keys up-front
             string? kid = TryReadKid(jwt);
-
             if (kid.HasContent())
             {
                 SecurityKey? match = cfg.SigningKeys.FirstOrDefault(k => string.Equals(k.KeyId, kid, StringComparison.Ordinal));
-
-                if (match is not null)
-                {
-                    tvp.IssuerSigningKeys = [match];
-                }
-                else
-                {
-                    // Fall back to all keys; ValidateToken will throw SignatureKeyNotFound and we refresh below
-                    tvp.IssuerSigningKeys = cfg.SigningKeys;
-                }
+                tvp.IssuerSigningKeys = match is not null ? new[] {match} : cfg.SigningKeys;
             }
             else
             {
@@ -125,7 +112,6 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             }
             catch (SecurityTokenSignatureKeyNotFoundException)
             {
-                // Key rotation: force a refresh and retry once
                 _cfgMgr.RequestRefresh();
                 cfg = await _cfgMgr.GetConfigurationAsync(ctx.CancellationToken).NoSync();
                 tvp = _baseParams.Clone();
@@ -133,28 +119,44 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
                 principal = _handler.ValidateToken(jwt, tvp, out _);
             }
 
-            // Optionally expose principal for downstream
+            // ***** Entra External ID hard requirement *****
+            // For v2 tokens expect azp; for v1 tokens expect appid. One of them MUST equal the known caller app id.
+            if (!AzpOrAppIdValid(principal, _expectedAzpOrAppId))
+            {
+                await req.WriteUnauthorized("Invalid caller (azp/appid)").NoSync();
+                return;
+            }
+
+            // Optional: stash the principal for downstream functions
             ctx.Items["User"] = principal;
 
             await next(ctx).NoSync();
         }
         catch (Exception ex)
         {
-            // Keep message-only to avoid logging large tokens/PII
             _log.LogWarning("JWT validation failed: {Message}", ex.Message);
             await req.WriteUnauthorized("Unauthorized").NoSync();
         }
     }
 
-    /// <summary>
-    /// Very small helper to read the 'kid' header without constructing a full JwtSecurityToken.
-    /// JwtSecurityTokenHandler can read headers cheaply.
-    /// </summary>
+    private static bool AzpOrAppIdValid(ClaimsPrincipal principal, string expected)
+    {
+        // No allocations beyond two FindFirst string comparisons.
+        string? azp = principal.FindFirst("azp")?.Value;
+        if (azp.HasContent() && string.Equals(azp, expected, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        string? appid = principal.FindFirst("appid")?.Value;
+        if (appid.HasContent() && string.Equals(appid, expected, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return false;
+    }
+
     private static string? TryReadKid(string jwt)
     {
         try
         {
-            // ReadJwtToken allocates a JwtSecurityToken but avoids full validation; still cheaper than full parse later
             JwtSecurityToken? tok = _handler.ReadJwtToken(jwt);
             return tok.Header?.Kid;
         }
