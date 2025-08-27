@@ -28,16 +28,25 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
     private static ConfigurationManager<OpenIdConnectConfiguration>? _cfgMgr;
     private static TokenValidationParameters? _baseParams;
 
-    private readonly ILogger<JwtAuthMiddleware> _log;
+    private readonly ILogger<JwtAuthMiddleware> _logger;
     private readonly string _expectedAzpOrAppId;
+    private readonly bool _enableVerboseLogging;
 
-    public JwtAuthMiddleware(IConfiguration config, ILogger<JwtAuthMiddleware> log)
+    public JwtAuthMiddleware(IConfiguration config, ILogger<JwtAuthMiddleware> logger)
     {
-        _log = log;
+        _logger = logger;
 
         // Default to the official Entra Extensions caller app id unless overridden:
         // https://learn.microsoft.com/azure/active-directory/external-identities/custom-authentication-extension-secure-rest-api
         _expectedAzpOrAppId = config.GetValue<string>("Jwt:ExpectedAzpOrAppId") ?? "99045fe1-7639-4a75-9d4a-577b6ca3810f";
+        
+        // Enable verbose logging flag - defaults to false for performance
+        _enableVerboseLogging = config.GetValue<bool>("Jwt:EnableVerboseLogging");
+
+        if (_enableVerboseLogging)
+        {
+            _logger.LogDebug("JWT Auth Middleware initialized with expected Azp/AppId: {ExpectedAzpOrAppId}", _expectedAzpOrAppId);
+        }
 
         if (_cfgMgr is null || _baseParams is null)
         {
@@ -46,6 +55,9 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             string[] issuers = config.GetValue<string[]>("Jwt:ValidIssuers") ?? [];
             string[] audiences = config.GetValue<string[]>("Jwt:ValidAudiences") ?? [];
             TimeSpan skew = TimeSpan.FromSeconds(config.GetValue<int?>("ClockSkewSeconds") ?? 120);
+
+            _logger.LogInformation("Initializing JWT configuration - Metadata: {MetadataAddress}, Issuers: {IssuerCount}, Audiences: {AudienceCount}, ClockSkew: {ClockSkew}s", 
+                meta, issuers.Length, audiences.Length, skew.TotalSeconds);
 
             var retriever = new HttpDocumentRetriever
             {
@@ -66,6 +78,11 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             };
 
             JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
+
+            if (_enableVerboseLogging)
+            {
+                _logger.LogDebug("JWT configuration initialized successfully");
+            }
         }
     }
 
@@ -75,20 +92,42 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
 
         if (req is null)
         {
+            if (_enableVerboseLogging)
+            {
+                _logger.LogDebug("Non-HTTP trigger detected, skipping JWT validation");
+            }
             await next(ctx).NoSync(); // non-HTTP trigger
             return;
         }
 
+        if (_enableVerboseLogging)
+        {
+            _logger.LogDebug("Processing HTTP request for JWT validation - Method: {Method}, URL: {Url}", 
+                req.Method, req.Url?.ToString());
+        }
+
         if (!req.TryGetBearer(out ReadOnlySpan<char> tokenSpan, out _))
         {
+            _logger.LogWarning("Missing Bearer token in request - Method: {Method}, URL: {Url}", 
+                req.Method, req.Url?.ToString());
             await req.WriteUnauthorized("Missing Bearer token").NoSync();
             return;
         }
 
         string jwt = tokenSpan.ToString();
+        
+        if (_enableVerboseLogging)
+        {
+            _logger.LogDebug("Bearer token found, length: {TokenLength}", jwt.Length);
+        }
 
         try
         {
+            if (_enableVerboseLogging)
+            {
+                _logger.LogDebug("Retrieving OpenID Connect configuration");
+            }
+            
             OpenIdConnectConfiguration cfg = await _cfgMgr!.GetConfigurationAsync(ctx.CancellationToken).NoSync();
 
             TokenValidationParameters tvp = _baseParams!.Clone();
@@ -96,11 +135,32 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             string? kid = TryReadKid(jwt);
             if (kid.HasContent())
             {
+                if (_enableVerboseLogging)
+                {
+                    _logger.LogDebug("JWT contains Key ID: {Kid}", kid);
+                }
+                
                 SecurityKey? match = cfg.SigningKeys.FirstOrDefault(k => string.Equals(k.KeyId, kid, StringComparison.Ordinal));
                 tvp.IssuerSigningKeys = match is not null ? new[] {match} : cfg.SigningKeys;
+                
+                if (_enableVerboseLogging)
+                {
+                    if (match is not null)
+                    {
+                        _logger.LogDebug("Found matching signing key for Kid: {Kid}", kid);
+                    }
+                    else
+                    {
+                        _logger.LogDebug("No matching signing key found for Kid: {Kid}, using all available keys", kid);
+                    }
+                }
             }
             else
             {
+                if (_enableVerboseLogging)
+                {
+                    _logger.LogDebug("JWT does not contain Key ID, using all available signing keys");
+                }
                 tvp.IssuerSigningKeys = cfg.SigningKeys;
             }
 
@@ -108,33 +168,67 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
 
             try
             {
+                if (_enableVerboseLogging)
+                {
+                    _logger.LogDebug("Validating JWT token");
+                }
+                
                 principal = _handler.ValidateToken(jwt, tvp, out _);
+                
+                if (_enableVerboseLogging)
+                {
+                    _logger.LogDebug("JWT token validation successful");
+                }
             }
             catch (SecurityTokenSignatureKeyNotFoundException)
             {
+                _logger.LogWarning("Security token signature key not found, refreshing configuration and retrying");
                 _cfgMgr.RequestRefresh();
                 cfg = await _cfgMgr.GetConfigurationAsync(ctx.CancellationToken).NoSync();
                 tvp = _baseParams.Clone();
                 tvp.IssuerSigningKeys = cfg.SigningKeys;
                 principal = _handler.ValidateToken(jwt, tvp, out _);
+                
+                if (_enableVerboseLogging)
+                {
+                    _logger.LogDebug("JWT token validation successful after configuration refresh");
+                }
             }
 
             // ***** Entra External ID hard requirement *****
             // For v2 tokens expect azp; for v1 tokens expect appid. One of them MUST equal the known caller app id.
             if (!AzpOrAppIdValid(principal, _expectedAzpOrAppId))
             {
+                var azp = principal.FindFirst("azp")?.Value;
+                var appid = principal.FindFirst("appid")?.Value;
+                
+                _logger.LogWarning("Invalid caller (azp/appid) - Expected: {Expected}, Found azp: {Azp}, Found appid: {Appid}", 
+                    _expectedAzpOrAppId, azp ?? "null", appid ?? "null");
+                
                 await req.WriteUnauthorized("Invalid caller (azp/appid)").NoSync();
                 return;
+            }
+
+            if (_enableVerboseLogging)
+            {
+                _logger.LogDebug("Azp/AppId validation successful");
             }
 
             // Optional: stash the principal for downstream functions
             ctx.Items["User"] = principal;
 
+            var userId = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? principal.FindFirst("sub")?.Value ?? "unknown";
+            var userEmail = principal.FindFirst(ClaimTypes.Email)?.Value ?? principal.FindFirst("email")?.Value ?? "unknown";
+            
+            _logger.LogInformation("JWT authentication successful - User: {UserId}, Email: {UserEmail}, Method: {Method}, URL: {Url}", 
+                userId, userEmail, req.Method, req.Url?.ToString());
+
             await next(ctx).NoSync();
         }
         catch (Exception ex)
         {
-            _log.LogWarning("JWT validation failed: {Message}", ex.Message);
+            _logger.LogError(ex, "JWT validation failed - Method: {Method}, URL: {Url}, Error: {Message}", 
+                req.Method, req.Url?.ToString(), ex.Message);
             await req.WriteUnauthorized("Unauthorized").NoSync();
         }
     }
