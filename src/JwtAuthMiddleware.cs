@@ -12,10 +12,13 @@ using Soenneker.Extensions.String;
 using Soenneker.Extensions.Task;
 using Soenneker.Extensions.ValueTask;
 using System;
+using System.Collections.Concurrent;
 using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
+using System.Reflection;
 using System.Security.Claims;
 using System.Threading.Tasks;
+using Soenneker.Functions.Attributes.AllowAnonymous;
 using HttpRequestData = Microsoft.Azure.Functions.Worker.Http.HttpRequestData;
 
 namespace Soenneker.Entra.Middlewares.JwtAuth.Functions;
@@ -31,6 +34,9 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
     private readonly ILogger<JwtAuthMiddleware> _logger;
     private readonly string _expectedAzpOrAppId;
     private readonly bool _enableVerboseLogging;
+
+    private static readonly ConcurrentDictionary<string, bool> _allowAnonCache =
+        new(StringComparer.Ordinal);
 
     public JwtAuthMiddleware(IConfiguration config, ILogger<JwtAuthMiddleware> logger)
     {
@@ -93,28 +99,29 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
         if (req is null)
         {
             if (_enableVerboseLogging)
-            {
                 _logger.LogDebug("Non-HTTP trigger detected, skipping JWT validation");
-            }
-            await next(ctx).NoSync(); // non-HTTP trigger
+
+            await next(ctx).NoSync();
             return;
         }
 
-        if (_enableVerboseLogging)
+        if (HasAllowAnonymousAttribute(ctx))
         {
-            _logger.LogDebug("Processing HTTP request for JWT validation - Method: {Method}, URL: {Url}", 
-                req.Method, req.Url?.ToString());
+            if (_enableVerboseLogging)
+                _logger.LogDebug("JWT middleware bypassed via [AllowAnonymousFunction] for: {Name}", ctx.FunctionDefinition.Name);
+
+            await next(ctx).NoSync();
+            return;
         }
 
         if (!req.TryGetBearer(out ReadOnlySpan<char> tokenSpan, out _))
         {
-            _logger.LogWarning("Missing Bearer token in request - Method: {Method}, URL: {Url}", 
-                req.Method, req.Url?.ToString());
+            _logger.LogWarning("Missing Bearer token in request - Method: {Method}, URL: {Url}", req.Method, req.Url?.ToString());
             await req.WriteUnauthorized("Missing Bearer token").NoSync();
             return;
         }
 
-        string jwt = tokenSpan.ToString();
+        var jwt = tokenSpan.ToString();
         
         if (_enableVerboseLogging)
         {
@@ -141,7 +148,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
                 }
                 
                 SecurityKey? match = cfg.SigningKeys.FirstOrDefault(k => string.Equals(k.KeyId, kid, StringComparison.Ordinal));
-                tvp.IssuerSigningKeys = match is not null ? new[] {match} : cfg.SigningKeys;
+                tvp.IssuerSigningKeys = match is not null ? [match] : cfg.SigningKeys;
                 
                 if (_enableVerboseLogging)
                 {
@@ -199,8 +206,8 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             // For v2 tokens expect azp; for v1 tokens expect appid. One of them MUST equal the known caller app id.
             if (!AzpOrAppIdValid(principal, _expectedAzpOrAppId))
             {
-                var azp = principal.FindFirst("azp")?.Value;
-                var appid = principal.FindFirst("appid")?.Value;
+                string? azp = principal.FindFirst("azp")?.Value;
+                string? appid = principal.FindFirst("appid")?.Value;
                 
                 _logger.LogWarning("Invalid caller (azp/appid) - Expected: {Expected}, Found azp: {Azp}, Found appid: {Appid}", 
                     _expectedAzpOrAppId, azp ?? "null", appid ?? "null");
@@ -217,8 +224,8 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             // Optional: stash the principal for downstream functions
             ctx.Items["User"] = principal;
 
-            var userId = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? principal.FindFirst("sub")?.Value ?? "unknown";
-            var userEmail = principal.FindFirst(ClaimTypes.Email)?.Value ?? principal.FindFirst("email")?.Value ?? "unknown";
+            string userId = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? principal.FindFirst("sub")?.Value ?? "unknown";
+            string userEmail = principal.FindFirst(ClaimTypes.Email)?.Value ?? principal.FindFirst("email")?.Value ?? "unknown";
             
             _logger.LogInformation("JWT authentication successful - User: {UserId}, Email: {UserEmail}, Method: {Method}, URL: {Url}", 
                 userId, userEmail, req.Method, req.Url?.ToString());
@@ -237,11 +244,13 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
     {
         // No allocations beyond two FindFirst string comparisons.
         string? azp = principal.FindFirst("azp")?.Value;
-        if (azp.HasContent() && string.Equals(azp, expected, StringComparison.OrdinalIgnoreCase))
+
+        if (azp.HasContent() && azp.EqualsIgnoreCase(expected))
             return true;
 
         string? appid = principal.FindFirst("appid")?.Value;
-        if (appid.HasContent() && string.Equals(appid, expected, StringComparison.OrdinalIgnoreCase))
+
+        if (appid.HasContent() && appid.EqualsIgnoreCase(expected))
             return true;
 
         return false;
@@ -258,5 +267,41 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
         {
             return null;
         }
+    }
+
+
+    private static bool HasAllowAnonymousAttribute(FunctionContext ctx)
+    {
+        FunctionDefinition? def = ctx.FunctionDefinition;
+        string? entryPoint = def?.EntryPoint; // e.g. "My.Namespace.MyClass.RunAsync"
+
+        if (entryPoint.IsNullOrEmpty())
+            return false;
+
+        // Cache on entryPoint string (unique per function)
+        if (_allowAnonCache.TryGetValue(entryPoint, out bool cached))
+            return cached;
+
+        int lastDot = entryPoint.LastIndexOf('.');
+        if (lastDot < 1)
+            return _allowAnonCache[entryPoint] = false;
+
+        string typeName = entryPoint[..lastDot];
+        string methodName = entryPoint[(lastDot + 1)..];
+
+        // Resolve the type from already-loaded assemblies (fast, no file IO)
+        Type? type = null;
+        foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            type = asm.GetType(typeName, throwOnError: false, ignoreCase: false);
+            if (type is not null) break;
+        }
+
+        MethodInfo? method = type?.GetMethod(methodName,
+            BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+
+        bool hasAttr = method?.GetCustomAttribute<AllowAnonymousFunctionAttribute>() is not null;
+        _allowAnonCache[entryPoint] = hasAttr;
+        return hasAttr;
     }
 }
