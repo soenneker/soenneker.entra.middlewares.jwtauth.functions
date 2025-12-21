@@ -42,7 +42,7 @@
 
     <ItemGroup>
         <PackageReference Include="Soenneker.Extensions.Configuration" Version="4.0.745" />
-        <PackageReference Include="Soenneker.Extensions.ValueTask" Version="4.0.97" />
+        <PackageReference Include="Soenneker.Extensions.ValueTask" Version="4.0.98" />
         <PackageReference Include="Soenneker.Functions.Attributes.AllowAnonymous" Version="4.0.4" />
         <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.15.0" />
         <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.15.0" />
