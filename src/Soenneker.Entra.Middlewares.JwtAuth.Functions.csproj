@@ -41,7 +41,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="Soenneker.Extensions.Configuration" Version="4.0.746" />
+        <PackageReference Include="Soenneker.Extensions.Configuration" Version="4.0.750" />
         <PackageReference Include="Soenneker.Extensions.ValueTask" Version="4.0.102" />
         <PackageReference Include="Soenneker.Functions.Attributes.AllowAnonymous" Version="4.0.5" />
         <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.15.0" />
