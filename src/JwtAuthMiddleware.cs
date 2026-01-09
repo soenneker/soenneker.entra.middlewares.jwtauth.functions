@@ -35,8 +35,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
     private readonly string _expectedAzpOrAppId;
     private readonly bool _enableVerboseLogging;
 
-    private static readonly ConcurrentDictionary<string, bool> _allowAnonCache =
-        new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, bool> _allowAnonCache = new(StringComparer.Ordinal);
 
     public JwtAuthMiddleware(IConfiguration config, ILogger<JwtAuthMiddleware> logger)
     {
@@ -45,7 +44,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
         // Default to the official Entra Extensions caller app id unless overridden:
         // https://learn.microsoft.com/azure/active-directory/external-identities/custom-authentication-extension-secure-rest-api
         _expectedAzpOrAppId = config.GetValue<string>("Jwt:ExpectedAzpOrAppId") ?? "99045fe1-7639-4a75-9d4a-577b6ca3810f";
-        
+
         // Enable verbose logging flag - defaults to false for performance
         _enableVerboseLogging = config.GetValue<bool>("Jwt:EnableVerboseLogging");
 
@@ -62,7 +61,8 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             string[] audiences = config.GetValue<string[]>("Jwt:ValidAudiences") ?? [];
             TimeSpan skew = TimeSpan.FromSeconds(config.GetValue<int?>("ClockSkewSeconds") ?? 120);
 
-            _logger.LogInformation("Initializing JWT configuration - Metadata: {MetadataAddress}, Issuers: {IssuerCount}, Audiences: {AudienceCount}, ClockSkew: {ClockSkew}s", 
+            _logger.LogInformation(
+                "Initializing JWT configuration - Metadata: {MetadataAddress}, Issuers: {IssuerCount}, Audiences: {AudienceCount}, ClockSkew: {ClockSkew}s",
                 meta, issuers.Length, audiences.Length, skew.TotalSeconds);
 
             var retriever = new HttpDocumentRetriever
@@ -94,14 +94,16 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
 
     public async Task Invoke(FunctionContext ctx, FunctionExecutionDelegate next)
     {
-        HttpRequestData? req = await ctx.GetHttpRequestDataAsync().NoSync();
+        HttpRequestData? req = await ctx.GetHttpRequestDataAsync()
+                                        .NoSync();
 
         if (req is null)
         {
             if (_enableVerboseLogging)
                 _logger.LogDebug("Non-HTTP trigger detected, skipping JWT validation");
 
-            await next(ctx).NoSync();
+            await next(ctx)
+                .NoSync();
             return;
         }
 
@@ -110,19 +112,21 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             if (_enableVerboseLogging)
                 _logger.LogDebug("JWT middleware bypassed via [AllowAnonymousFunction] for: {Name}", ctx.FunctionDefinition.Name);
 
-            await next(ctx).NoSync();
+            await next(ctx)
+                .NoSync();
             return;
         }
 
         if (!req.TryGetBearer(out ReadOnlySpan<char> tokenSpan, out _))
         {
             _logger.LogWarning("Missing Bearer token in request - Method: {Method}, URL: {Url}", req.Method, req.Url?.ToString());
-            await req.WriteUnauthorized("Missing Bearer token").NoSync();
+            await req.WriteUnauthorized("Missing Bearer token")
+                     .NoSync();
             return;
         }
 
         var jwt = tokenSpan.ToString();
-        
+
         if (_enableVerboseLogging)
         {
             _logger.LogDebug("Bearer token found, length: {TokenLength}", jwt.Length);
@@ -134,8 +138,9 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             {
                 _logger.LogDebug("Retrieving OpenID Connect configuration");
             }
-            
-            OpenIdConnectConfiguration cfg = await _cfgMgr!.GetConfigurationAsync(ctx.CancellationToken).NoSync();
+
+            OpenIdConnectConfiguration cfg = await _cfgMgr!.GetConfigurationAsync(ctx.CancellationToken)
+                                                           .NoSync();
 
             TokenValidationParameters tvp = _baseParams!.Clone();
 
@@ -146,10 +151,10 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
                 {
                     _logger.LogDebug("JWT contains Key ID: {Kid}", kid);
                 }
-                
+
                 SecurityKey? match = cfg.SigningKeys.FirstOrDefault(k => string.Equals(k.KeyId, kid, StringComparison.Ordinal));
                 tvp.IssuerSigningKeys = match is not null ? [match] : cfg.SigningKeys;
-                
+
                 if (_enableVerboseLogging)
                 {
                     if (match is not null)
@@ -168,6 +173,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
                 {
                     _logger.LogDebug("JWT does not contain Key ID, using all available signing keys");
                 }
+
                 tvp.IssuerSigningKeys = cfg.SigningKeys;
             }
 
@@ -179,9 +185,9 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
                 {
                     _logger.LogDebug("Validating JWT token");
                 }
-                
+
                 principal = _handler.ValidateToken(jwt, tvp, out _);
-                
+
                 if (_enableVerboseLogging)
                 {
                     _logger.LogDebug("JWT token validation successful");
@@ -191,11 +197,12 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             {
                 _logger.LogWarning("Security token signature key not found, refreshing configuration and retrying");
                 _cfgMgr.RequestRefresh();
-                cfg = await _cfgMgr.GetConfigurationAsync(ctx.CancellationToken).NoSync();
+                cfg = await _cfgMgr.GetConfigurationAsync(ctx.CancellationToken)
+                                   .NoSync();
                 tvp = _baseParams.Clone();
                 tvp.IssuerSigningKeys = cfg.SigningKeys;
                 principal = _handler.ValidateToken(jwt, tvp, out _);
-                
+
                 if (_enableVerboseLogging)
                 {
                     _logger.LogDebug("JWT token validation successful after configuration refresh");
@@ -206,13 +213,16 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             // For v2 tokens expect azp; for v1 tokens expect appid. One of them MUST equal the known caller app id.
             if (!AzpOrAppIdValid(principal, _expectedAzpOrAppId))
             {
-                string? azp = principal.FindFirst("azp")?.Value;
-                string? appid = principal.FindFirst("appid")?.Value;
-                
-                _logger.LogWarning("Invalid caller (azp/appid) - Expected: {Expected}, Found azp: {Azp}, Found appid: {Appid}", 
-                    _expectedAzpOrAppId, azp ?? "null", appid ?? "null");
-                
-                await req.WriteUnauthorized("Invalid caller (azp/appid)").NoSync();
+                string? azp = principal.FindFirst("azp")
+                                       ?.Value;
+                string? appid = principal.FindFirst("appid")
+                                         ?.Value;
+
+                _logger.LogWarning("Invalid caller (azp/appid) - Expected: {Expected}, Found azp: {Azp}, Found appid: {Appid}", _expectedAzpOrAppId,
+                    azp ?? "null", appid ?? "null");
+
+                await req.WriteUnauthorized("Invalid caller (azp/appid)")
+                         .NoSync();
                 return;
             }
 
@@ -224,31 +234,38 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             // Optional: stash the principal for downstream functions
             ctx.Items["User"] = principal;
 
-            string userId = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? principal.FindFirst("sub")?.Value ?? "unknown";
-            string userEmail = principal.FindFirst(ClaimTypes.Email)?.Value ?? principal.FindFirst("email")?.Value ?? "unknown";
-            
-            _logger.LogInformation("JWT authentication successful - User: {UserId}, Email: {UserEmail}, Method: {Method}, URL: {Url}", 
-                userId, userEmail, req.Method, req.Url?.ToString());
+            string userId = principal.FindFirst(ClaimTypes.NameIdentifier)
+                                     ?.Value ?? principal.FindFirst("sub")
+                                                         ?.Value ?? "unknown";
+            string userEmail = principal.FindFirst(ClaimTypes.Email)
+                                        ?.Value ?? principal.FindFirst("email")
+                                                            ?.Value ?? "unknown";
 
-            await next(ctx).NoSync();
+            _logger.LogInformation("JWT authentication successful - User: {UserId}, Email: {UserEmail}, Method: {Method}, URL: {Url}", userId, userEmail,
+                req.Method, req.Url?.ToString());
+
+            await next(ctx)
+                .NoSync();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "JWT validation failed - Method: {Method}, URL: {Url}, Error: {Message}", 
-                req.Method, req.Url?.ToString(), ex.Message);
-            await req.WriteUnauthorized("Unauthorized").NoSync();
+            _logger.LogError(ex, "JWT validation failed - Method: {Method}, URL: {Url}, Error: {Message}", req.Method, req.Url?.ToString(), ex.Message);
+            await req.WriteUnauthorized("Unauthorized")
+                     .NoSync();
         }
     }
 
     private static bool AzpOrAppIdValid(ClaimsPrincipal principal, string expected)
     {
         // No allocations beyond two FindFirst string comparisons.
-        string? azp = principal.FindFirst("azp")?.Value;
+        string? azp = principal.FindFirst("azp")
+                               ?.Value;
 
         if (azp.HasContent() && azp.EqualsIgnoreCase(expected))
             return true;
 
-        string? appid = principal.FindFirst("appid")?.Value;
+        string? appid = principal.FindFirst("appid")
+                                 ?.Value;
 
         if (appid.HasContent() && appid.EqualsIgnoreCase(expected))
             return true;
@@ -294,11 +311,11 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
         foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
         {
             type = asm.GetType(typeName, throwOnError: false, ignoreCase: false);
-            if (type is not null) break;
+            if (type is not null)
+                break;
         }
 
-        MethodInfo? method = type?.GetMethod(methodName,
-            BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        MethodInfo? method = type?.GetMethod(methodName, BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
 
         bool hasAttr = method?.GetCustomAttribute<AllowAnonymousFunctionAttribute>() is not null;
         _allowAnonCache[entryPoint] = hasAttr;
