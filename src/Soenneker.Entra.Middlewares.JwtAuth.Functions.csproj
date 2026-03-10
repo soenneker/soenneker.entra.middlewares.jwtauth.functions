@@ -41,7 +41,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="Soenneker.Extensions.Configuration" Version="4.0.783" />
+        <PackageReference Include="Soenneker.Extensions.Configuration" Version="4.0.790" />
         <PackageReference Include="Soenneker.Extensions.Task" Version="4.0.115" />
         <PackageReference Include="Soenneker.Extensions.ValueTask" Version="4.0.105" />
         <PackageReference Include="Soenneker.Functions.Attributes.AllowAnonymous" Version="4.0.6" />
