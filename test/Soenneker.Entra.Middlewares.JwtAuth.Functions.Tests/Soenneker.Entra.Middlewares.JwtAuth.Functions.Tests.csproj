@@ -27,7 +27,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\src\Soenneker.Entra.Middlewares.JwtAuth.Functions.csproj" />
+        <ProjectReference Include="..\..\src\Soenneker.Entra.Middlewares.JwtAuth.Functions\Soenneker.Entra.Middlewares.JwtAuth.Functions.csproj" />
     </ItemGroup>
 
     <ItemGroup>
