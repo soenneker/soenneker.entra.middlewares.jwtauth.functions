@@ -50,6 +50,6 @@
         <PackageReference Include="Soenneker.Functions.Attributes.AllowAnonymous" Version="4.0.14" />
         <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.17.0" />
         <PackageReference Include="Microsoft.Azure.Functions.Worker" Version="2.51.0" />
-        <PackageReference Include="Soenneker.Extensions.HttpRequestDatas" Version="4.0.80" />
+        <PackageReference Include="Soenneker.Extensions.HttpRequestDatas" Version="4.0.81" />
     </ItemGroup>
 </Project>
