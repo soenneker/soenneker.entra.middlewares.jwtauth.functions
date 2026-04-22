@@ -1,16 +1,15 @@
-﻿using Soenneker.Tests.FixturedUnit;
-using Xunit;
+using Soenneker.Tests.HostedUnit;
 
 namespace Soenneker.Entra.Middlewares.JwtAuth.Functions.Tests;
 
-[Collection("Collection")]
-public sealed class JwtAuthMiddlewareTests : FixturedUnitTest
+[ClassDataSource<Host>(Shared = SharedType.PerTestSession)]
+public sealed class JwtAuthMiddlewareTests : HostedUnitTest
 {
-    public JwtAuthMiddlewareTests(Fixture fixture, ITestOutputHelper output) : base(fixture, output)
+    public JwtAuthMiddlewareTests(Host host) : base(host)
     {
     }
 
-    [Fact]
+    [Test]
     public void Default()
     {
     }
