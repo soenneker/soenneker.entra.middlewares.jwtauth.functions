@@ -93,11 +93,11 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
     }
 
     /// <summary>
-    /// Executes the invoke operation.
+    /// Invokes the jwt auth middleware with the supplied payload.
     /// </summary>
-    /// <param name="ctx">The ctx.</param>
-    /// <param name="next">The next.</param>
-    /// <returns>A task that represents the asynchronous operation.</returns>
+    /// <param name="ctx">Ctx for the invoke operation.</param>
+    /// <param name="next">Next for the invoke operation.</param>
+    /// <returns>A task that completes when the callback has finished running.</returns>
     public async Task Invoke(FunctionContext ctx, FunctionExecutionDelegate next)
     {
         HttpRequestData? req = await ctx.GetHttpRequestDataAsync()
