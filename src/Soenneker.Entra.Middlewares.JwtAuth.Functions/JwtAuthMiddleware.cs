@@ -23,13 +23,11 @@ using HttpRequestData = Microsoft.Azure.Functions.Worker.Http.HttpRequestData;
 
 namespace Soenneker.Entra.Middlewares.JwtAuth.Functions;
 
-/// <inheritdoc cref="IJwtAuthMiddleware"/>
 public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
 {
-    private static readonly JwtSecurityTokenHandler _handler = new();
-
-    private static ConfigurationManager<OpenIdConnectConfiguration>? _cfgMgr;
-    private static TokenValidationParameters? _baseParams;
+    private readonly JwtSecurityTokenHandler _handler = new() { MapInboundClaims = false };
+    private readonly ConfigurationManager<OpenIdConnectConfiguration> _cfgMgr;
+    private readonly TokenValidationParameters _baseParams;
 
     private readonly ILogger<JwtAuthMiddleware> _logger;
     private readonly string _expectedAzpOrAppId;
@@ -53,51 +51,52 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             _logger.LogDebug("JWT Auth Middleware initialized with expected Azp/AppId: {ExpectedAzpOrAppId}", _expectedAzpOrAppId);
         }
 
-        if (_cfgMgr is null || _baseParams is null)
+        string meta = config.GetValueStrict<string>("Jwt:MetadataAddress");
+
+        if (!Uri.TryCreate(meta, UriKind.Absolute, out Uri? metadataUri) || metadataUri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("Jwt:MetadataAddress must be an absolute HTTPS URL.");
+
+        string[] issuers = config.GetValue<string[]>("Jwt:ValidIssuers") ?? [];
+        string[] audiences = config.GetValue<string[]>("Jwt:ValidAudiences") ?? [];
+        string[] algorithms = config.GetValue<string[]>("Jwt:ValidAlgorithms") ?? [SecurityAlgorithms.RsaSha256];
+
+        if (issuers.Length == 0)
+            throw new InvalidOperationException("Jwt:ValidIssuers must contain at least one issuer.");
+
+        if (audiences.Length == 0)
+            throw new InvalidOperationException("Jwt:ValidAudiences must contain at least one audience.");
+
+        if (algorithms.Length == 0)
+            throw new InvalidOperationException("Jwt:ValidAlgorithms must contain at least one signing algorithm.");
+
+        TimeSpan skew = TimeSpan.FromSeconds(config.GetValue<int?>("Jwt:ClockSkewSeconds") ?? config.GetValue<int?>("ClockSkewSeconds") ?? 120);
+
+        _logger.LogInformation(
+            "Initializing JWT configuration - Metadata: {MetadataAddress}, Issuers: {IssuerCount}, Audiences: {AudienceCount}, ClockSkew: {ClockSkew}s",
+            meta, issuers.Length, audiences.Length, skew.TotalSeconds);
+
+        var retriever = new HttpDocumentRetriever { RequireHttps = true };
+
+        _cfgMgr = new ConfigurationManager<OpenIdConnectConfiguration>(meta, new OpenIdConnectConfigurationRetriever(), retriever);
+
+        _baseParams = new TokenValidationParameters
         {
-            string meta = config.GetValueStrict<string>("Jwt:MetadataAddress") ?? throw new InvalidOperationException("Jwt:MetadataAddress is required");
+            ValidateIssuerSigningKey = true,
+            ValidateIssuer = true,
+            ValidIssuers = issuers,
+            ValidateAudience = true,
+            ValidAudiences = audiences,
+            ValidateLifetime = true,
+            ClockSkew = skew,
+            ValidAlgorithms = algorithms
+        };
 
-            string[] issuers = config.GetValue<string[]>("Jwt:ValidIssuers") ?? [];
-            string[] audiences = config.GetValue<string[]>("Jwt:ValidAudiences") ?? [];
-            TimeSpan skew = TimeSpan.FromSeconds(config.GetValue<int?>("ClockSkewSeconds") ?? 120);
-
-            _logger.LogInformation(
-                "Initializing JWT configuration - Metadata: {MetadataAddress}, Issuers: {IssuerCount}, Audiences: {AudienceCount}, ClockSkew: {ClockSkew}s",
-                meta, issuers.Length, audiences.Length, skew.TotalSeconds);
-
-            var retriever = new HttpDocumentRetriever
-            {
-                RequireHttps = meta.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-            };
-
-            _cfgMgr = new ConfigurationManager<OpenIdConnectConfiguration>(meta, new OpenIdConnectConfigurationRetriever(), retriever);
-
-            _baseParams = new TokenValidationParameters
-            {
-                ValidateIssuerSigningKey = true,
-                ValidateIssuer = issuers.Length > 0,
-                ValidIssuers = issuers,
-                ValidateAudience = audiences.Length > 0,
-                ValidAudiences = audiences,
-                ValidateLifetime = true,
-                ClockSkew = skew
-            };
-
-            JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
-
-            if (_enableVerboseLogging)
-            {
-                _logger.LogDebug("JWT configuration initialized successfully");
-            }
+        if (_enableVerboseLogging)
+        {
+            _logger.LogDebug("JWT configuration initialized successfully");
         }
     }
 
-    /// <summary>
-    /// Invokes the jwt auth middleware with the supplied payload.
-    /// </summary>
-    /// <param name="ctx">Ctx for the invoke operation.</param>
-    /// <param name="next">Next for the invoke operation.</param>
-    /// <returns>A task that completes when the callback has finished running.</returns>
     public async Task Invoke(FunctionContext ctx, FunctionExecutionDelegate next)
     {
         HttpRequestData? req = await ctx.GetHttpRequestDataAsync()
@@ -125,7 +124,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
 
         if (!req.TryGetBearer(out ReadOnlySpan<char> tokenSpan, out _))
         {
-            _logger.LogWarning("Missing Bearer token in request - Method: {Method}, URL: {Url}", req.Method, req.Url?.ToString());
+            _logger.LogWarning("Missing Bearer token - Function: {Function}, Method: {Method}", ctx.FunctionDefinition.Name, req.Method);
             await req.WriteUnauthorized("Missing Bearer token")
                      .NoSync();
             return;
@@ -145,10 +144,10 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
                 _logger.LogDebug("Retrieving OpenID Connect configuration");
             }
 
-            OpenIdConnectConfiguration cfg = await _cfgMgr!.GetConfigurationAsync(ctx.CancellationToken)
+            OpenIdConnectConfiguration cfg = await _cfgMgr.GetConfigurationAsync(ctx.CancellationToken)
                                                            .NoSync();
 
-            TokenValidationParameters tvp = _baseParams!.Clone();
+            TokenValidationParameters tvp = _baseParams.Clone();
 
             string? kid = TryReadKid(jwt);
             if (kid.HasContent())
@@ -240,22 +239,18 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             // Optional: stash the principal for downstream functions
             ctx.Items["User"] = principal;
 
-            string userId = principal.FindFirst(ClaimTypes.NameIdentifier)
-                                     ?.Value ?? principal.FindFirst("sub")
-                                                         ?.Value ?? "unknown";
-            string userEmail = principal.FindFirst(ClaimTypes.Email)
-                                        ?.Value ?? principal.FindFirst("email")
-                                                            ?.Value ?? "unknown";
-
-            _logger.LogInformation("JWT authentication successful - User: {UserId}, Email: {UserEmail}, Method: {Method}, URL: {Url}", userId, userEmail,
-                req.Method, req.Url?.ToString());
+            _logger.LogInformation("JWT authentication successful - Function: {Function}, Method: {Method}", ctx.FunctionDefinition.Name, req.Method);
 
             await next(ctx)
                 .NoSync();
         }
+        catch (OperationCanceledException) when (ctx.CancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "JWT validation failed - Method: {Method}, URL: {Url}, Error: {Message}", req.Method, req.Url?.ToString(), ex.Message);
+            _logger.LogError(ex, "JWT validation failed - Function: {Function}, Method: {Method}", ctx.FunctionDefinition.Name, req.Method);
             await req.WriteUnauthorized("Unauthorized")
                      .NoSync();
         }
@@ -279,7 +274,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
         return false;
     }
 
-    private static string? TryReadKid(string jwt)
+    private string? TryReadKid(string jwt)
     {
         try
         {
