@@ -23,6 +23,7 @@ using HttpRequestData = Microsoft.Azure.Functions.Worker.Http.HttpRequestData;
 
 namespace Soenneker.Entra.Middlewares.JwtAuth.Functions;
 
+/// <inheritdoc cref="IJwtAuthMiddleware" />
 public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
 {
     private readonly JwtSecurityTokenHandler _handler = new() { MapInboundClaims = false };
