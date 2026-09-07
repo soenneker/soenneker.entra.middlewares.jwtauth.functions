@@ -47,7 +47,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
         // Enable verbose logging flag - defaults to false for performance
         _enableVerboseLogging = config.GetValue<bool>("Jwt:EnableVerboseLogging");
 
-        if (_enableVerboseLogging)
+        if (_enableVerboseLogging && _logger.IsEnabled(LogLevel.Debug))
         {
             _logger.LogDebug("JWT Auth Middleware initialized with expected Azp/AppId: {ExpectedAzpOrAppId}", _expectedAzpOrAppId);
         }
@@ -92,7 +92,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             ValidAlgorithms = algorithms
         };
 
-        if (_enableVerboseLogging)
+        if (_enableVerboseLogging && _logger.IsEnabled(LogLevel.Debug))
         {
             _logger.LogDebug("JWT configuration initialized successfully");
         }
@@ -105,7 +105,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
 
         if (req is null)
         {
-            if (_enableVerboseLogging)
+            if (_enableVerboseLogging && _logger.IsEnabled(LogLevel.Debug))
                 _logger.LogDebug("Non-HTTP trigger detected, skipping JWT validation");
 
             await next(ctx)
@@ -115,7 +115,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
 
         if (HasAllowAnonymousAttribute(ctx))
         {
-            if (_enableVerboseLogging)
+            if (_enableVerboseLogging && _logger.IsEnabled(LogLevel.Debug))
                 _logger.LogDebug("JWT middleware bypassed via [AllowAnonymousFunction] for: {Name}", ctx.FunctionDefinition.Name);
 
             await next(ctx)
@@ -133,14 +133,14 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
 
         var jwt = tokenSpan.ToString();
 
-        if (_enableVerboseLogging)
+        if (_enableVerboseLogging && _logger.IsEnabled(LogLevel.Debug))
         {
             _logger.LogDebug("Bearer token found, length: {TokenLength}", jwt.Length);
         }
 
         try
         {
-            if (_enableVerboseLogging)
+            if (_enableVerboseLogging && _logger.IsEnabled(LogLevel.Debug))
             {
                 _logger.LogDebug("Retrieving OpenID Connect configuration");
             }
@@ -153,7 +153,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             string? kid = TryReadKid(jwt);
             if (kid.HasContent())
             {
-                if (_enableVerboseLogging)
+                if (_enableVerboseLogging && _logger.IsEnabled(LogLevel.Debug))
                 {
                     _logger.LogDebug("JWT contains Key ID: {Kid}", kid);
                 }
@@ -161,7 +161,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
                 SecurityKey? match = cfg.SigningKeys.FirstOrDefault(k => string.Equals(k.KeyId, kid, StringComparison.Ordinal));
                 tvp.IssuerSigningKeys = match is not null ? [match] : cfg.SigningKeys;
 
-                if (_enableVerboseLogging)
+                if (_enableVerboseLogging && _logger.IsEnabled(LogLevel.Debug))
                 {
                     if (match is not null)
                     {
@@ -175,7 +175,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             }
             else
             {
-                if (_enableVerboseLogging)
+                if (_enableVerboseLogging && _logger.IsEnabled(LogLevel.Debug))
                 {
                     _logger.LogDebug("JWT does not contain Key ID, using all available signing keys");
                 }
@@ -187,14 +187,14 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
 
             try
             {
-                if (_enableVerboseLogging)
+                if (_enableVerboseLogging && _logger.IsEnabled(LogLevel.Debug))
                 {
                     _logger.LogDebug("Validating JWT token");
                 }
 
                 principal = _handler.ValidateToken(jwt, tvp, out _);
 
-                if (_enableVerboseLogging)
+                if (_enableVerboseLogging && _logger.IsEnabled(LogLevel.Debug))
                 {
                     _logger.LogDebug("JWT token validation successful");
                 }
@@ -209,7 +209,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
                 tvp.IssuerSigningKeys = cfg.SigningKeys;
                 principal = _handler.ValidateToken(jwt, tvp, out _);
 
-                if (_enableVerboseLogging)
+                if (_enableVerboseLogging && _logger.IsEnabled(LogLevel.Debug))
                 {
                     _logger.LogDebug("JWT token validation successful after configuration refresh");
                 }
@@ -232,7 +232,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
                 return;
             }
 
-            if (_enableVerboseLogging)
+            if (_enableVerboseLogging && _logger.IsEnabled(LogLevel.Debug))
             {
                 _logger.LogDebug("Azp/AppId validation successful");
             }
