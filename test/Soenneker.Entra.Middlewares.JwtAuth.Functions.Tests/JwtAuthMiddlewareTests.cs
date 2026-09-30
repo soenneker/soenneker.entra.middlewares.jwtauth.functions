@@ -15,7 +15,7 @@ public sealed class JwtAuthMiddlewareTests : HostedUnitTest
     }
 
     [Test]
-    public async Task Rejects_non_https_metadata()
+    public async ValueTask Rejects_non_https_metadata()
     {
         IConfiguration configuration = BuildConfiguration("http://localhost/.well-known/openid-configuration", includeIssuer: true, includeAudience: true);
 
@@ -23,7 +23,7 @@ public sealed class JwtAuthMiddlewareTests : HostedUnitTest
     }
 
     [Test]
-    public async Task Rejects_missing_issuers()
+    public async ValueTask Rejects_missing_issuers()
     {
         IConfiguration configuration = BuildConfiguration("https://login.example.com/.well-known/openid-configuration", includeIssuer: false,
             includeAudience: true);
@@ -32,7 +32,7 @@ public sealed class JwtAuthMiddlewareTests : HostedUnitTest
     }
 
     [Test]
-    public async Task Rejects_missing_audiences()
+    public async ValueTask Rejects_missing_audiences()
     {
         IConfiguration configuration = BuildConfiguration("https://login.example.com/.well-known/openid-configuration", includeIssuer: true,
             includeAudience: false);
