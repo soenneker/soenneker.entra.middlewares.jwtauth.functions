@@ -1,4 +1,7 @@
-﻿using Microsoft.Azure.Functions.Worker;
+﻿using System.Diagnostics.CodeAnalysis;
+using System.Collections.Generic;
+using System.Globalization;
+using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Middleware;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -30,22 +33,43 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
     private readonly ConfigurationManager<OpenIdConnectConfiguration> _cfgMgr;
     private readonly TokenValidationParameters _baseParams;
 
+    private readonly Func<FunctionContext, bool> _isAnonymous;
+
     private readonly ILogger<JwtAuthMiddleware> _logger;
     private readonly string _expectedAzpOrAppId;
     private readonly bool _enableVerboseLogging;
 
     private static readonly ConcurrentDictionary<string, bool> _allowAnonCache = new(StringComparer.Ordinal);
 
+    [RequiresUnreferencedCode("Function attributes are discovered by runtime entry-point name. Supply explicit anonymous entry points when trimming.")]
     public JwtAuthMiddleware(IConfiguration config, ILogger<JwtAuthMiddleware> logger)
+        : this(config, logger, HasAllowAnonymousAttribute)
     {
+    }
+
+    public JwtAuthMiddleware(IConfiguration config, ILogger<JwtAuthMiddleware> logger, IReadOnlySet<string> anonymousEntryPoints)
+        : this(config, logger, CreateAnonymousPredicate(anonymousEntryPoints))
+    {
+    }
+
+    private static Func<FunctionContext, bool> CreateAnonymousPredicate(IReadOnlySet<string> entryPoints)
+    {
+        ArgumentNullException.ThrowIfNull(entryPoints);
+        var snapshot = new HashSet<string>(entryPoints, StringComparer.Ordinal);
+        return context => snapshot.Contains(context.FunctionDefinition.EntryPoint);
+    }
+
+    private JwtAuthMiddleware(IConfiguration config, ILogger<JwtAuthMiddleware> logger, Func<FunctionContext, bool> isAnonymous)
+    {
+        _isAnonymous = isAnonymous;
         _logger = logger;
 
         // Default to the official Entra Extensions caller app id unless overridden:
         // https://learn.microsoft.com/azure/active-directory/external-identities/custom-authentication-extension-secure-rest-api
-        _expectedAzpOrAppId = config.GetValue<string>("Jwt:ExpectedAzpOrAppId") ?? "99045fe1-7639-4a75-9d4a-577b6ca3810f";
+        _expectedAzpOrAppId = config["Jwt:ExpectedAzpOrAppId"] ?? "99045fe1-7639-4a75-9d4a-577b6ca3810f";
 
         // Enable verbose logging flag - defaults to false for performance
-        _enableVerboseLogging = config.GetValue<bool>("Jwt:EnableVerboseLogging");
+        _enableVerboseLogging = bool.Parse(config["Jwt:EnableVerboseLogging"] ?? "false");
 
         if (_enableVerboseLogging && _logger.IsEnabled(LogLevel.Debug))
         {
@@ -57,9 +81,12 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
         if (!Uri.TryCreate(meta, UriKind.Absolute, out Uri? metadataUri) || metadataUri.Scheme != Uri.UriSchemeHttps)
             throw new InvalidOperationException("Jwt:MetadataAddress must be an absolute HTTPS URL.");
 
-        string[] issuers = config.GetValue<string[]>("Jwt:ValidIssuers") ?? [];
-        string[] audiences = config.GetValue<string[]>("Jwt:ValidAudiences") ?? [];
-        string[] algorithms = config.GetValue<string[]>("Jwt:ValidAlgorithms") ?? [SecurityAlgorithms.RsaSha256];
+        string[] issuers = config.GetSection("Jwt:ValidIssuers").GetChildren().Select(section => section.Value ?? throw new InvalidOperationException("JWT list values must not be null.")).ToArray();
+        string[] audiences = config.GetSection("Jwt:ValidAudiences").GetChildren().Select(section => section.Value ?? throw new InvalidOperationException("JWT list values must not be null.")).ToArray();
+        string[] algorithms = config.GetSection("Jwt:ValidAlgorithms").GetChildren().Select(section => section.Value ?? throw new InvalidOperationException("JWT list values must not be null.")).ToArray();
+
+        if (!config.GetSection("Jwt:ValidAlgorithms").Exists())
+            algorithms = [SecurityAlgorithms.RsaSha256];
 
         if (issuers.Length == 0)
             throw new InvalidOperationException("Jwt:ValidIssuers must contain at least one issuer.");
@@ -70,7 +97,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
         if (algorithms.Length == 0)
             throw new InvalidOperationException("Jwt:ValidAlgorithms must contain at least one signing algorithm.");
 
-        TimeSpan skew = TimeSpan.FromSeconds(config.GetValue<int?>("Jwt:ClockSkewSeconds") ?? config.GetValue<int?>("ClockSkewSeconds") ?? 120);
+        TimeSpan skew = TimeSpan.FromSeconds(int.Parse(config["Jwt:ClockSkewSeconds"] ?? config["ClockSkewSeconds"] ?? "120", CultureInfo.InvariantCulture));
 
         _logger.LogInformation(
             "Initializing JWT configuration - Metadata: {MetadataAddress}, Issuers: {IssuerCount}, Audiences: {AudienceCount}, ClockSkew: {ClockSkew}s",
@@ -113,7 +140,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             return;
         }
 
-        if (HasAllowAnonymousAttribute(ctx))
+        if (_isAnonymous(ctx))
         {
             if (_enableVerboseLogging && _logger.IsEnabled(LogLevel.Debug))
                 _logger.LogDebug("JWT middleware bypassed via [AllowAnonymousFunction] for: {Name}", ctx.FunctionDefinition.Name);
@@ -289,6 +316,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
     }
 
 
+    [RequiresUnreferencedCode("Function attributes are discovered by runtime entry-point name.")]
     private static bool HasAllowAnonymousAttribute(FunctionContext ctx)
     {
         FunctionDefinition? def = ctx.FunctionDefinition;
