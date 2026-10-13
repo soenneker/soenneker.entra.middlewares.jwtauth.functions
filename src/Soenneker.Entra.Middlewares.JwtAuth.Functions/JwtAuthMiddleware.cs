@@ -76,7 +76,7 @@ public sealed class JwtAuthMiddleware : IJwtAuthMiddleware
             _logger.LogDebug("JWT Auth Middleware initialized with expected Azp/AppId: {ExpectedAzpOrAppId}", _expectedAzpOrAppId);
         }
 
-        string meta = config.GetValueStrict<string>("Jwt:MetadataAddress");
+        string meta = config.GetStringStrict("Jwt:MetadataAddress");
 
         if (!Uri.TryCreate(meta, UriKind.Absolute, out Uri? metadataUri) || metadataUri.Scheme != Uri.UriSchemeHttps)
             throw new InvalidOperationException("Jwt:MetadataAddress must be an absolute HTTPS URL.");
