@@ -44,12 +44,12 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="Soenneker.Extensions.Configuration" Version="4.0.903" />
-        <PackageReference Include="Soenneker.Extensions.Task" Version="4.0.134" />
-        <PackageReference Include="Soenneker.Extensions.ValueTask" Version="4.0.127" />
-        <PackageReference Include="Soenneker.Functions.Attributes.AllowAnonymous" Version="4.0.27" />
+        <PackageReference Include="Soenneker.Extensions.Configuration" Version="4.0.909" />
+        <PackageReference Include="Soenneker.Extensions.Task" Version="4.0.139" />
+        <PackageReference Include="Soenneker.Extensions.ValueTask" Version="4.0.132" />
+        <PackageReference Include="Soenneker.Functions.Attributes.AllowAnonymous" Version="4.0.32" />
         <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.23.0" />
         <PackageReference Include="Microsoft.Azure.Functions.Worker" Version="2.52.0" />
-        <PackageReference Include="Soenneker.Extensions.HttpRequestDatas" Version="4.0.159" />
+        <PackageReference Include="Soenneker.Extensions.HttpRequestDatas" Version="4.0.165" />
     </ItemGroup>
 </Project>
