@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
-        <TargetFramework>net10.0</TargetFramework>
+        <TargetFramework>net11.0</TargetFramework>
         <Nullable>enable</Nullable>
         <Platforms>AnyCPU</Platforms>
         <NoWarn>$(NoWarn);1591</NoWarn>
@@ -8,7 +8,7 @@
 
     <PropertyGroup>
         <Description>Middleware for Azure Functions that validates Microsoft Entra JWTs</Description>
-        <Version Condition="'$(BUILD_VERSION)' == ''">4.0.0</Version>
+        <Version Condition="'$(BUILD_VERSION)' == ''">11.0.0</Version>
         <Version Condition="'$(BUILD_VERSION)' != ''">$(BUILD_VERSION)</Version>
         <AssemblyName>Soenneker.Entra.Middlewares.JwtAuth.Functions</AssemblyName>
         <PackageId>Soenneker.Entra.Middlewares.JwtAuth.Functions</PackageId>
@@ -44,7 +44,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="Soenneker.Extensions.Configuration" Version="4.0.910" />
+        <PackageReference Include="Soenneker.Extensions.Configuration" Version="11.0.913" />
         <PackageReference Include="Soenneker.Extensions.Task" Version="4.0.140" />
         <PackageReference Include="Soenneker.Extensions.ValueTask" Version="4.0.133" />
         <PackageReference Include="Soenneker.Functions.Attributes.AllowAnonymous" Version="4.0.33" />
